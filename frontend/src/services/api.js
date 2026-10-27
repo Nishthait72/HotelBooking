@@ -2,6 +2,13 @@ import { getInitialMockData } from './mockData';
 
 const BASE_URL = '/api';
 
+// Detect if we are on a static host (GitHub Pages, Surge, etc.) where no backend exists
+const isStaticHost =
+  typeof window !== 'undefined' &&
+  (window.location.hostname.endsWith('github.io') ||
+    window.location.hostname.includes('surge.sh') ||
+    window.location.protocol === 'file:');
+
 // Initialize Local Demo State
 const getDemoStore = () => {
   const stored = localStorage.getItem('hotelpro_demo_data');
@@ -22,15 +29,19 @@ const saveDemoStore = (data) => {
 };
 
 // Handle Demo Requests in static client environments
-const handleDemoRequest = (endpoint, method = 'GET', body = null) => {
+const handleDemoRequest = async (endpoint, method = 'GET', body = null) => {
+  // Add a slight natural delay for realistic UI responsiveness
+  await new Promise((r) => setTimeout(r, 120));
+
   const store = getDemoStore();
   const url = endpoint.split('?')[0];
   const params = new URLSearchParams(endpoint.includes('?') ? endpoint.split('?')[1] : '');
 
-  // Auth endpoints
+  // 1. Auth endpoints
   if (url === '/auth/login' && method === 'POST') {
     const { email } = body || {};
-    const user = store.users.find((u) => u.email.toLowerCase() === (email || '').toLowerCase()) || {
+    const found = store.users.find((u) => u.email.toLowerCase() === (email || '').toLowerCase());
+    const user = found || {
       id: 'usr_guest',
       name: 'Guest User',
       email: email || 'guest@hotelpro.com',
@@ -61,10 +72,10 @@ const handleDemoRequest = (endpoint, method = 'GET', body = null) => {
   }
 
   if (url === '/auth/staff') {
-    return { success: true, data: store.users.filter((u) => u.role !== 'Guest') };
+    return { success: true, count: store.users.length, data: store.users.filter((u) => u.role !== 'Guest') };
   }
 
-  // Stats Dashboard
+  // 2. Dashboard Stats
   if (url === '/stats/dashboard') {
     const token = localStorage.getItem('hotelpro_token') || '';
     const userId = token.replace('demo_token_', '');
@@ -115,12 +126,12 @@ const handleDemoRequest = (endpoint, method = 'GET', body = null) => {
           totalGuests: store.guests.length,
           pendingTasks: store.tasks.filter((t) => t.status !== 'completed').length,
         },
-        recentBookings: store.bookings.slice(0, 5),
+        recentBookings: store.bookings.slice(0, 6),
       },
     };
   }
 
-  // Rooms
+  // 3. Rooms
   if (url === '/rooms') {
     if (method === 'GET') {
       let result = [...store.rooms];
@@ -143,6 +154,12 @@ const handleDemoRequest = (endpoint, method = 'GET', body = null) => {
     }
   }
 
+  if (url.startsWith('/rooms/') && method === 'GET') {
+    const id = url.replace('/rooms/', '');
+    const r = store.rooms.find((item) => item._id === id) || store.rooms[0];
+    return { success: true, data: r };
+  }
+
   if (url.startsWith('/rooms/') && method === 'PUT') {
     const id = url.replace('/rooms/', '');
     const idx = store.rooms.findIndex((r) => r._id === id);
@@ -157,10 +174,10 @@ const handleDemoRequest = (endpoint, method = 'GET', body = null) => {
     const id = url.replace('/rooms/', '');
     store.rooms = store.rooms.filter((r) => r._id !== id);
     saveDemoStore(store);
-    return { success: true, message: 'Deleted' };
+    return { success: true, message: 'Room deleted' };
   }
 
-  // Bookings
+  // 4. Bookings
   if (url === '/bookings/check-availability') {
     const type = params.get('type');
     let avail = store.rooms.filter((r) => r.status !== 'maintenance');
@@ -224,17 +241,23 @@ const handleDemoRequest = (endpoint, method = 'GET', body = null) => {
     }
   }
 
+  if (url.startsWith('/bookings/') && method === 'GET') {
+    const id = url.replace('/bookings/', '');
+    const b = store.bookings.find((item) => item._id === id) || store.bookings[0];
+    const pays = store.payments.filter((p) => (p.booking?._id || p.booking) === b._id);
+    return { success: true, data: { ...b, payments: pays } };
+  }
+
   if (url.includes('/bookings/') && url.endsWith('/status')) {
     const id = url.split('/')[2];
     const b = store.bookings.find((item) => item._id === id);
     if (b) {
       b.status = body.status;
-      if (body.status === 'checked_in') {
-        const rm = store.rooms.find((r) => r._id === (b.room._id || b.room));
-        if (rm) rm.status = 'booked';
-      } else if (body.status === 'checked_out' || body.status === 'cancelled') {
-        const rm = store.rooms.find((r) => r._id === (b.room._id || b.room));
-        if (rm) rm.status = 'available';
+      const targetRoomId = b.room?._id || b.room;
+      const rm = store.rooms.find((r) => r._id === targetRoomId);
+      if (rm) {
+        if (body.status === 'checked_in') rm.status = 'booked';
+        if (body.status === 'checked_out' || body.status === 'cancelled') rm.status = 'available';
       }
       saveDemoStore(store);
       return { success: true, data: b };
@@ -246,22 +269,24 @@ const handleDemoRequest = (endpoint, method = 'GET', body = null) => {
     const b = store.bookings.find((item) => item._id === id);
     if (b) {
       b.status = 'cancelled';
-      const rm = store.rooms.find((r) => r._id === (b.room._id || b.room));
+      const targetRoomId = b.room?._id || b.room;
+      const rm = store.rooms.find((r) => r._id === targetRoomId);
       if (rm) rm.status = 'available';
       saveDemoStore(store);
       return { success: true, data: b };
     }
   }
 
-  // Guests
+  // 5. Guests
   if (url === '/guests') {
     if (method === 'GET') {
       let list = [...store.guests];
       const search = params.get('search');
       if (search) {
-        list = list.filter((g) =>
-          g.fullName.toLowerCase().includes(search.toLowerCase()) ||
-          g.email.toLowerCase().includes(search.toLowerCase())
+        list = list.filter(
+          (g) =>
+            g.fullName.toLowerCase().includes(search.toLowerCase()) ||
+            g.email.toLowerCase().includes(search.toLowerCase())
         );
       }
       return { success: true, count: list.length, data: list };
@@ -284,7 +309,7 @@ const handleDemoRequest = (endpoint, method = 'GET', body = null) => {
     return { success: true, data: { ...g, bookings: store.bookings.slice(0, 2) } };
   }
 
-  // Payments
+  // 6. Payments
   if (url === '/payments') {
     if (method === 'GET') {
       return { success: true, count: store.payments.length, data: store.payments };
@@ -309,7 +334,7 @@ const handleDemoRequest = (endpoint, method = 'GET', body = null) => {
     }
   }
 
-  // Tasks
+  // 7. Tasks
   if (url === '/tasks') {
     if (method === 'GET') {
       let list = [...store.tasks];
@@ -354,6 +379,13 @@ const handleDemoRequest = (endpoint, method = 'GET', body = null) => {
 
 const request = async (endpoint, options = {}) => {
   const token = localStorage.getItem('hotelpro_token');
+  const body = options.body ? JSON.parse(options.body) : null;
+  const method = options.method || 'GET';
+
+  // If on GitHub Pages or static host, directly use interactive demo store (prevents 405 Method Not Allowed)
+  if (isStaticHost) {
+    return handleDemoRequest(endpoint, method, body);
+  }
 
   const headers = {
     'Content-Type': 'application/json',
@@ -374,11 +406,10 @@ const request = async (endpoint, options = {}) => {
       return await response.json();
     }
 
-    // If 404 or server not running (e.g. static hosting on GitHub Pages / Surge), fallback to interactive demo
-    if (response.status === 404 || response.status === 502 || response.status === 504) {
+    // If static server returns 405 (Method Not Allowed) or 404/502, gracefully fallback
+    if (response.status === 405 || response.status === 404 || response.status === 502 || response.status === 504) {
       console.warn(`[HotelPro API] Endpoint ${endpoint} returned ${response.status}, serving via interactive demo mode.`);
-      const body = options.body ? JSON.parse(options.body) : null;
-      return handleDemoRequest(endpoint, options.method || 'GET', body);
+      return handleDemoRequest(endpoint, method, body);
     }
 
     const data = await response.json().catch(() => ({}));
@@ -388,11 +419,10 @@ const request = async (endpoint, options = {}) => {
     error.data = data;
     throw error;
   } catch (err) {
-    // If fetch failed completely (Failed to fetch, network error, or static deploy), transparently fallback to demo mode
+    // If network error, fallback to demo mode
     if (err.name === 'TypeError' || err.message.includes('fetch')) {
       console.warn(`[HotelPro API] Network unreachable, activating live interactive demo mode.`);
-      const body = options.body ? JSON.parse(options.body) : null;
-      return handleDemoRequest(endpoint, options.method || 'GET', body);
+      return handleDemoRequest(endpoint, method, body);
     }
     throw err;
   }
