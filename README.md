@@ -1,5 +1,8 @@
 # HotelPro – Hotel Management System
 
+> 🌐 **Live Demo URL**: [https://nishthait72.github.io/HotelBooking/](https://nishthait72.github.io/HotelBooking/)  
+> 🔗 **GitHub Repository**: [https://github.com/Nishthait72/HotelBooking](https://github.com/Nishthait72/HotelBooking)
+
 HotelPro is a modern, minimal, and scalable MERN stack web application designed for boutique hotels and large hotel chains. It streamlines room reservations, real-time occupancy tracking, guest directory management, payment processing, and staff task workflows through an intuitive, responsive interface with robust role-based authentication.
 
 ---
