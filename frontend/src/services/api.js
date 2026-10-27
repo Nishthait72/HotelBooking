@@ -2,12 +2,21 @@ import { getInitialMockData } from './mockData';
 
 const BASE_URL = '/api';
 
-// Detect if we are on a static host (GitHub Pages, Surge, etc.) where no backend exists
-const isStaticHost =
-  typeof window !== 'undefined' &&
-  (window.location.hostname.endsWith('github.io') ||
-    window.location.hostname.includes('surge.sh') ||
-    window.location.protocol === 'file:');
+// Detect static hosting environments where no backend API exists.
+// On GitHub Pages (hostname ends with github.io), Surge, or file://, we must NEVER
+// make real fetch calls — GitHub Pages returns 405 for POST/PUT/DELETE requests.
+const isStaticHost = (() => {
+  if (typeof window === 'undefined') return false;
+  const h = window.location.hostname;
+  const proto = window.location.protocol;
+  return (
+    h.endsWith('github.io') ||
+    h.endsWith('surge.sh') ||
+    h.endsWith('netlify.app') ||
+    h.endsWith('vercel.app') ||
+    proto === 'file:'
+  );
+})();
 
 // Initialize Local Demo State
 const getDemoStore = () => {
@@ -382,7 +391,8 @@ const request = async (endpoint, options = {}) => {
   const body = options.body ? JSON.parse(options.body) : null;
   const method = options.method || 'GET';
 
-  // If on GitHub Pages or static host, directly use interactive demo store (prevents 405 Method Not Allowed)
+  // ALWAYS use demo mode on GitHub Pages / static hosting — no backend exists there
+  // This check is done BEFORE any fetch to completely avoid the 405 Method Not Allowed error
   if (isStaticHost) {
     return handleDemoRequest(endpoint, method, body);
   }
@@ -396,36 +406,33 @@ const request = async (endpoint, options = {}) => {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
+  let response;
   try {
-    const response = await fetch(`${BASE_URL}${endpoint}`, {
+    response = await fetch(`${BASE_URL}${endpoint}`, {
       ...options,
       headers,
     });
+  } catch (networkErr) {
+    // Network completely unreachable (no backend running locally) — use demo mode
+    console.warn(`[HotelPro] Network error — activating interactive demo mode.`);
+    return handleDemoRequest(endpoint, method, body);
+  }
 
-    if (response.ok) {
-      return await response.json();
-    }
-
-    // If static server returns 405 (Method Not Allowed) or 404/502, gracefully fallback
-    if (response.status === 405 || response.status === 404 || response.status === 502 || response.status === 504) {
-      console.warn(`[HotelPro API] Endpoint ${endpoint} returned ${response.status}, serving via interactive demo mode.`);
+  // Any 4xx/5xx from a static server or missing backend → demo mode
+  if (!response.ok) {
+    if ([404, 405, 500, 502, 503, 504].includes(response.status)) {
+      console.warn(`[HotelPro] API returned ${response.status} — activating interactive demo mode.`);
       return handleDemoRequest(endpoint, method, body);
     }
-
     const data = await response.json().catch(() => ({}));
     const errorMsg = data.message || `Request failed with status ${response.status}`;
     const error = new Error(errorMsg);
     error.status = response.status;
     error.data = data;
     throw error;
-  } catch (err) {
-    // If network error, fallback to demo mode
-    if (err.name === 'TypeError' || err.message.includes('fetch')) {
-      console.warn(`[HotelPro API] Network unreachable, activating live interactive demo mode.`);
-      return handleDemoRequest(endpoint, method, body);
-    }
-    throw err;
   }
+
+  return await response.json();
 };
 
 export const api = {
